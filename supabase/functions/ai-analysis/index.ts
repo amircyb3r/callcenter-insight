@@ -5,41 +5,69 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// GapGPT is an OpenAI-compatible gateway. The external CDN base
+// (api.gapapi.com) is the one intended for servers hosted outside Iran,
+// which is where Supabase Edge Functions run.
+const GAPGPT_BASE_URL = Deno.env.get("GAPGPT_BASE_URL") ?? "https://api.gapapi.com/v1";
+const GAPGPT_MODEL = Deno.env.get("GAPGPT_MODEL") ?? "gpt-4o";
+
+const SYSTEM_PROMPT = `تو یک تحلیلگر ارشد داده در مرکز عملیات شبکه (NOC) و مرکز تماس پشتیبانی فنی یک شرکت ارائه‌دهنده اینترنت (ISP) هستی. تخصص تو کشف الگو در گزارش‌های خرابی مشترکین، تشخیص نقاط بحرانی جغرافیایی، و اولویت‌بندی اقدامات عملیاتی است.
+
+به تو یک «خلاصه آماری» از فیدبک‌های ثبت‌شده داده می‌شود. وظیفه تو ارائه یک تحلیل عمیق، دقیق و کاملاً حرفه‌ای به زبان فارسی است.
+
+قوانین:
+- فقط و فقط بر اساس داده‌های واقعی که در ورودی آمده تحلیل کن. هیچ عدد یا آماری از خودت نساز.
+- اگر داده‌ای برای یک بخش وجود ندارد، صادقانه بگو «داده کافی نیست».
+- لحن: حرفه‌ای، شفاف، مدیریتی. از کلی‌گویی و جملات تبلیغاتی پرهیز کن.
+- خروجی را با Markdown و سرتیترها و بولت‌ها مرتب کن.
+
+ساختار خروجی باید دقیقاً این بخش‌ها باشد:
+
+## خلاصه مدیریتی
+دو تا سه جمله که وضعیت کلی و سطح بحران را بیان کند.
+
+## مشکلات کلیدی و الگوها
+مهم‌ترین انواع مشکلات، سهم هرکدام، و الگوهای قابل توجه (مثلاً تمرکز روی یک نوع مشکل یا یک محصول مثل فیبر/ADSL/شبکه داخلی).
+
+## نقاط داغ جغرافیایی
+شهرها و مراکز پرگزارش و تمرکز خرابی روی آن‌ها.
+
+## تحلیل زمانی و spike
+اگر اوج تماس یا افزایش ناگهانی وجود دارد، زمان و شدت آن را تفسیر کن؛ در غیر این صورت بگو روند یکنواخت است.
+
+## فرضیه‌های ریشه‌ای محتمل
+چند فرضیه فنی محتمل برای علت مشکلات غالب (مثلاً اختلال backbone، تجهیزات یک مرکز خاص، ازدحام پهنای باند در ساعات پیک).
+
+## اقدامات پیشنهادی (به ترتیب اولویت)
+فهرست شماره‌دار و عملیاتی از اقدامات مشخص و قابل اجرا برای تیم فنی.`;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const { stats } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    if (!stats || typeof stats !== "string") {
+      return new Response(JSON.stringify({ error: "داده‌ای برای تحلیل ارسال نشده است." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const GAPGPT_API_KEY = Deno.env.get("GAPGPT_API_KEY");
+    if (!GAPGPT_API_KEY) throw new Error("GAPGPT_API_KEY is not configured");
+
+    const response = await fetch(`${GAPGPT_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${GAPGPT_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: GAPGPT_MODEL,
+        temperature: 0.4,
         messages: [
-          {
-            role: "system",
-            content: `تو یک تحلیلگر داده‌ی مرکز تماس پشتیبانی فنی اینترنت هستی. 
-وظیفه تو فقط و فقط «گزارش آماری» دادن است. ممنوع است راه‌حل، توصیه فنی، یا مراحل رفع مشکل ارائه بدهی.
-
-خروجی تو باید شامل:
-1. خلاصه وضعیت (تعداد کل، روند کلی)
-2. مشکلات پرتکرار و سهم هرکدام
-3. شهرها و مراکز پرگزارش
-4. اگر spike (افزایش ناگهانی) وجود دارد، زمان و شدت آن
-5. مقایسه نسبی بین انواع مشکلات
-
-خروجی باید فارسی، مختصر و حرفه‌ای باشد. فقط گزارش بده.`
-          },
-          {
-            role: "user",
-            content: `آمار فیدبک‌ها:\n${stats}`
-          }
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: `خلاصه آماری فیدبک‌ها:\n${stats}\n\nبر اساس این داده‌ها تحلیل کامل را طبق ساختار خواسته‌شده ارائه بده.` },
         ],
       }),
     });
@@ -51,15 +79,21 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      if (response.status === 401 || response.status === 403) {
+        return new Response(JSON.stringify({ error: "کلید API گپ‌جی‌پی‌تی نامعتبر است یا دسترسی ندارد." }), {
+          status: response.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "اعتبار ناکافی. لطفاً اعتبار خود را شارژ کنید." }), {
+        return new Response(JSON.stringify({ error: "اعتبار ناکافی. لطفاً اعتبار حساب گپ‌جی‌پی‌تی را شارژ کنید." }), {
           status: 402,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       const t = await response.text();
-      console.error("AI gateway error:", response.status, t);
-      throw new Error("AI gateway error");
+      console.error("GapGPT error:", response.status, t);
+      throw new Error("GapGPT API error");
     }
 
     const data = await response.json();

@@ -211,7 +211,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* AI Analysis */}
-      <AIAnalysis filters={filters} feedbacks={feedbacks || []} />
+      <AIAnalysis feedbacks={feedbacks || []} />
     </div>
   );
 }
